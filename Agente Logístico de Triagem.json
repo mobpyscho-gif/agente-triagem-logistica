@@ -1,0 +1,433 @@
+{
+  "name": "Agente Logístico de Triagem",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {
+          "readStatus": "unread"
+        }
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -2320,
+        -1008
+      ],
+      "id": "eacaff8c-9474-4ea6-9615-451c7e25e9a6",
+      "name": "Gmail Trigger",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qiMy3hjyZ42MaxkI",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3.5-flash",
+          "mode": "id"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=# PAPEL\nÉs um assistente sénior de operações logísticas especializado em triagem\nde ocorrências de transporte (middle-mile). A tua função é analisar e-mails\nrecebidos de clientes/parceiros e devolver uma classificação estruturada.\n\n# TAREFA\nPara cada e-mail recebido, deves:\n1. Classificar a INTENÇÃO em exatamente uma das categorias:\n   - \"Divergência de Frete\"\n   - \"Atraso de Entrega\"\n   - \"Outros\"\n2. Classificar o TOM do remetente em exatamente uma das categorias:\n   - \"Positivo\" | \"Neutro\" | \"Insatisfeito\" | \"Urgente/Irado\"\n3. Atribuir a PRIORIDADE com base nas regras abaixo:\n   - \"P1\" (crítica): tom \"Urgente/Irado\" OU menção a perda financeira,\n     carga extraviada, prazo legal/contratual ou escalada para gestão.\n   - \"P2\" (alta): tom \"Insatisfeito\" OU atraso > 24h OU divergência de frete\n     com valor > R$ 1.000 OU menção explícita a piso regulatório (ANTT,\n     tabela mínima, legislação de frete) que indique risco de\n     descumprimento legal.\n   - \"P3\" (normal): demais casos classificáveis.\n   - \"P4\" (baixa): \"Outros\" sem impacto operacional evidente.\n4. Extrair os campos do schema abaixo. Para identificadores:\n   - \"numero_pedido\": número do pedido (ex.: 12345, #45821)\n   - \"numero_viagem\": número da viagem/romaneio (ex.: 1159RGM75)\n   Se o e-mail mencionar apenas um dos dois, preenche o que existir e\n   devolve null no outro. Nunca dupliques o mesmo valor nos dois campos.\n   Nunca inventes dados: usa null quando o dado não estiver no e-mail.\n\n# REGRAS DE DESAMBIGUAÇÃO\n- Se o e-mail mencionar MAIS DE UMA intenção, escolhe a de MAIOR prioridade\n  operacional (Atraso de Entrega > Divergência de Frete > Outros) e regista\n  as restantes em \"intencoes_secundarias\".\n- Se o e-mail for spam, marketing ou não relacionado a transporte,\n  classifica como \"Outros\" com prioridade \"P4\" e justifica em \"motivo\".\n- Se o texto for ilegível ou vazio, devolve o JSON com todos os campos null,\n  \"intencao\": \"Outros\", \"prioridade\": \"P4\" e \"motivo\": \"Conteúdo não interpretável\".\n\n# REGRA DO CAMPO requer_humano\nDefine \"requer_humano\": true quando QUALQUER uma das condições abaixo:\n- prioridade = \"P1\"\n- valor_divergencia > R$ 5.000\n- o e-mail menciona risco jurídico, multa, processo ou ANTT\n- dados críticos ausentes (numero_pedido E numero_viagem ambos null)\n- intencao = \"Outros\" com tom \"Urgente/Irado\"\n\nCaso contrário, \"requer_humano\": false.\n\n# SCHEMA DE SAÍDA (obrigatório, JSON válido, sem markdown, sem texto adicional)\n{\n  \"intencao\": \"Divergência de Frete\" | \"Atraso de Entrega\" | \"Outros\",\n  \"intencoes_secundarias\": [string],\n  \"tom\": \"Positivo\" | \"Neutro\" | \"Insatisfeito\" | \"Urgente/Irado\",\n  \"prioridade\": \"P1\" | \"P2\" | \"P3\" | \"P4\",\n  \"numero_pedido\": string | null,\n  \"numero_viagem\": string | null,\n  \"transportadora\": string | null,\n  \"valor_divergencia\": number | null,\n  \"prazo_mencionado\": string | null,\n  \"resumo\": string,\n  \"motivo\": string,\n  \"requer_humano\": boolean\n}\n\n# RESTRIÇÕES\n- Devolve APENAS o objeto JSON. Sem ```json, sem introdução, sem explicação.\n- Todos os textos de saída em português (PT).\n- Não inventes valores: usa null quando o dado não estiver no e-mail.\n- Não alteres nomes de chaves nem valores permitidos.\n\n# EXEMPLO (few-shot)\nEntrada: \"Bom dia, o frete combinado era R$ 2.500 mas a fatura veio R$ 3.100.\nPedido #45821, transportadora TransX. Preciso de retorno urgente.\"\nSaída:\n{\"intencao\":\"Divergência de Frete\",\"intencoes_secundarias\":[],\n\"tom\":\"Insatisfeito\",\"prioridade\":\"P2\",\"numero_pedido\":\"45821\",\n\"numero_viagem\":null,\"transportadora\":\"TransX\",\"valor_divergencia\":600,\n\"prazo_mencionado\":null,\"resumo\":\"Cliente reporta divergência de R$600 no\nfrete do pedido 45821 (TransX).\",\"motivo\":\"Divergência > R$1.000 e tom\ninsatisfeito.\",\"requer_humano\":false}\n\nAssunto: {{ $('Gmail Trigger').item.json.Subject }}\nRemetente: {{ $('Gmail Trigger').item.json.From }}\nCorpo: {{ $('Gmail Trigger').item.json.text || $('Gmail Trigger').item.json.snippet }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        -1904,
+        -1136
+      ],
+      "id": "ce0b7136-4f61-4010-8840-4396cba005ba",
+      "name": "Message a model",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 2,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "A0xMJesyk4BO8Lvq",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pega a resposta bruta do nó Gemini\nconst item = $input.first().json;\n\n// O texto está em content.parts[0].text (formato nativo do Gemini)\nlet respostaBruta = '';\ntry {\n  respostaBruta = item.content.parts[0].text;\n} catch (e) {\n  respostaBruta = item.text || JSON.stringify(item);\n}\n\n// Limpa markdown e extrai o JSON\nlet dados;\ntry {\n  const semMarkdown = respostaBruta.replace(/```json/g, '').replace(/```/g, '').trim();\n  const inicio = semMarkdown.indexOf('{');\n  const fim = semMarkdown.lastIndexOf('}');\n  dados = JSON.parse(semMarkdown.substring(inicio, fim + 1));\n} catch (e) {\n  // Fallback se o parse falhar\n  return [{\n    json: {\n      intencao: \"Outros\",\n      intencoes_secundarias: [],\n      tom: \"Neutro\",\n      prioridade: \"P4\",\n      numero_pedido: null,\n      numero_viagem: null,\n      transportadora: null,\n      valor_divergencia: null,\n      prazo_mencionado: null,\n      resumo: \"Falha ao interpretar resposta da IA\",\n      motivo: \"Erro de parse no JSON\",\n      requer_humano: true,\n      erro_parse: true\n    }\n  }];\n}\n\n// Normaliza nomes de campos (corrige acentos e variações)\nconst normalizado = {\n  intencao: dados[\"intenção\"] ?? dados[\"intencao\"] ?? \"Outros\",\n  intencoes_secundarias: dados[\"intencoes_secundarias\"] ?? [],\n  tom: dados.tom ?? \"Neutro\",\n  prioridade: dados.prioridade ?? \"P4\",\n  numero_pedido: dados.numero_pedido ?? null,\n  numero_viagem: dados.numero_viagem ?? null,\n  transportadora: dados.transportadora ?? null,\n  valor_divergencia: dados.valor_divergencia ?? null,\n  prazo_mencionado: dados.prazo_mencionado ?? null,\n  resumo: dados.resumo ?? \"\",\n  motivo: dados.motivo ?? \"\",\n  requer_humano: dados.requer_humano ?? false\n};\n\nreturn [{ json: normalizado }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1584,
+        -1008
+      ],
+      "id": "72e9a34e-b442-4842-a122-6755de610760",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1sYgHo0zgbSpA3wzm5jwavY3_XUhLKONzwKysEtoMYNY",
+          "mode": "list",
+          "cachedResultName": "Triagem Logística",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1sYgHo0zgbSpA3wzm5jwavY3_XUhLKONzwKysEtoMYNY/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Ocorrências",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1sYgHo0zgbSpA3wzm5jwavY3_XUhLKONzwKysEtoMYNY/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Data": "={{ $now.toISO() }}",
+            "Remetente": "={{ $('Gmail Trigger').item.json.From }}",
+            "Assunto": "={{ $('Gmail Trigger').item.json.Subject }}",
+            "Intenção": "={{ $json.intencao }}",
+            "Tom": "={{ $json.tom }}",
+            "Prioridade": "={{ $json.prioridade }}",
+            "Numero_Pedido": "={{ $json.numero_pedido }}",
+            "Transportadora": "={{ $json.transportadora }}",
+            "Resumo": "={{ $json.resumo }}",
+            "Requer_Humano": "={{ $json.requer_humano }}",
+            "Numero_Viagem": "={{ $json.numero_viagem }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Data",
+              "displayName": "Data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Remetente",
+              "displayName": "Remetente",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Assunto",
+              "displayName": "Assunto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Intenção",
+              "displayName": "Intenção",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Tom",
+              "displayName": "Tom",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Prioridade",
+              "displayName": "Prioridade",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Numero_Pedido",
+              "displayName": "Numero_Pedido",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Numero_Viagem",
+              "displayName": "Numero_Viagem",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Transportadora",
+              "displayName": "Transportadora",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Resumo",
+              "displayName": "Resumo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Requer_Humano",
+              "displayName": "Requer_Humano",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -1360,
+        -1008
+      ],
+      "id": "2f14d5ad-65f0-41e3-9d80-1b2af68f310a",
+      "name": "Append row in sheet",
+      "retryOnFail": false,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ly4B5gz6L93mpnuA",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "reply",
+        "messageId": "={{ $('Gmail Trigger').item.json.id }}",
+        "message": "={{ $json.htmlPronto }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -928,
+        -1008
+      ],
+      "id": "eb47f973-5dd4-45d4-8fb8-af11ccad85ec",
+      "name": "Reply to a message",
+      "webhookId": "85f20eb6-70f2-4fc9-a017-cf5ff97baeeb",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qiMy3hjyZ42MaxkI",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\nconst html = `Olá, ${item.Remetente},<br><br>Recebemos sua ocorrência sobre: ${item.Resumo}<br><br>Nossa equipe já está analisando com prioridade ${item.Prioridade}.<br>Caso necessário, entraremos em contato.<br><br>Atenciosamente,<br>Equipe de Operações Logísticas`;\n\nreturn [{ json: { ...item, htmlPronto: html } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1152,
+        -1008
+      ],
+      "id": "a7f7a8cd-e815-4967-b542-c07fd7da3745",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d0a4c237-3657-4e14-b186-854cc44fa46a",
+              "leftValue": "={{ $json.From }}",
+              "rightValue": "ari.jvs2.0@gmail.com",
+              "operator": {
+                "type": "string",
+                "operation": "notContains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -2096,
+        -1008
+      ],
+      "id": "68d89b5b-ec66-4c90-99d3-fd1b5cabb1ac",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "operation": "markAsRead",
+        "messageId": "={{ $('Gmail Trigger').item.json.id }}"
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -704,
+        -1008
+      ],
+      "id": "6e1fc973-2805-498b-b1ce-a93d174baba0",
+      "name": "Mark a message as read",
+      "webhookId": "af1d3ca5-dc85-440d-ab4d-3100fb86e38b",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qiMy3hjyZ42MaxkI",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Reply to a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to a message": {
+      "main": [
+        [
+          {
+            "node": "Mark a message as read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "0d8f3e64-c66f-4dd4-8474-015264997f96",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "87f5ec257b952773985fdb74163c92e44a67f0058eff1df6bf748b1607194e15"
+  },
+  "nodeGroups": [],
+  "id": "MLd4f7zGjqTtBjNQ",
+  "tags": []
+}
