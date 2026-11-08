@@ -145,3 +145,99 @@ O prompt é concatenado dinamicamente com os dados do e-mail no momento da execu
 - O **Teste 3** demonstra o caso normal: tom Neutro, divergência sem agravantes, `Requer_Humano = FALSE`. O `Numero_Pedido` e a `Transportadora` foram extraídos corretamente.
 
 Os três testes cobrem **três faixas de prioridade diferentes** (P1, P2, P3), provando que o agente aplica as regras de negócio de forma consistente — não é apenas o tom que define a prioridade, mas a combinação de tom + valor + menção regulatória + presença de dados críticos.
+
+## 3. Arquitetura da Solução
+
+### 3.1 Visão Geral do Fluxo
+
+O fluxo foi implementado no **n8n** (self-hosted) e é composto por **8 nós** conectados em sequência, com um nó de decisão (IF) que filtra as respostas automáticas do próprio sistema para evitar loops.
+
+```text
+┌─────────────────┐
+│  Gmail Trigger  │  Monitora e-mails não lidos (poll a cada minuto)
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│       IF        │  Filtra: remetente NÃO contém o e-mail da operação?
+└───┬─────────┬───┘
+    │ true    │ false
+    ▼         ▼
+┌─────────────┐  (sem conexão)
+│ Message a   │  Gemini classifica e extrai JSON
+│ model       │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────┐
+│ Code in         │  Limpa markdown, faz parse do JSON
+│ JavaScript      │  e normaliza os campos
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Append row in   │  Grava os dados na planilha
+│ sheet           │  "Triagem Logística" → aba "Ocorrências"
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Code in         │  Monta o HTML da resposta
+│ JavaScript1     │  personalizada (com quebras de linha)
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Reply to a      │  Envia a resposta no mesmo thread
+│ message         │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Mark a message  │  Marca o e-mail original como lido
+│ as read         │  (evita reprocessamento)
+└─────────────────┘
+```
+
+### 3.2 Descrição dos Nós
+
+| # | Nó | Tipo | Função |
+|---|----|------|--------|
+| 1 | **Gmail Trigger** | Trigger | Monitora a caixa de entrada a cada minuto e dispara o fluxo quando há e-mail não lido (`readStatus: unread`). |
+| 2 | **IF** | Condicional | Verifica se o remetente **não contém** o e-mail da operação (`ari.jvs2.0@gmail.com`). Se for a própria resposta automática, o fluxo para aqui (evita loop). Se for cliente/parceiro, segue para o Gemini. |
+| 3 | **Message a model** | LLM (Gemini) | Recebe o prompt (System Prompt + dados do e-mail) e devolve o JSON estruturado com intenção, tom, prioridade e campos extraídos. Configurado com `temperature: 0.1` e `retryOnFail: true`. |
+| 4 | **Code in JavaScript** | Code | Limpa a resposta do Gemini (remove markdown), faz o `JSON.parse`, trata erros de parse com fallback e **normaliza** os nomes dos campos (ex.: `intenção` → `intencao`, `numero_viagem` → `numero_viagem`). |
+| 5 | **Append row in sheet** | Google Sheets | Adiciona uma nova linha na planilha `Triagem Logística` (aba `Ocorrências`), mapeando cada campo do JSON para a coluna correspondente. |
+| 6 | **Code in JavaScript1** | Code | Monta o HTML da resposta automática com quebras de linha (`<br>`), personalizando com o nome do remetente, resumo e prioridade. |
+| 7 | **Reply to a message** | Gmail | Envia a resposta no **mesmo thread** do e-mail original (`messageId` do Gmail Trigger), usando o HTML gerado pelo nó 6. |
+| 8 | **Mark a message as read** | Gmail | Marca o e-mail original como **lido** (`markAsRead`), evitando que o Gmail Trigger o capture novamente na próxima verificação. |
+
+### 3.3 Fluxo de Dados (Passo a Passo)
+
+1. **Entrada:** um e-mail chega à caixa de entrada e fica com status "não lido".
+2. **Detecção:** o `Gmail Trigger` (poll a cada minuto) identifica o e-mail e dispara o fluxo, passando `id`, `From`, `Subject` e `text`/`snippet`.
+3. **Filtro:** o `IF` verifica o remetente. Se for a própria resposta automática (contém `ari.jvs2.0@gmail.com`), o fluxo para. Caso contrário, segue.
+4. **Classificação:** o `Message a model` envia o prompt + dados do e-mail ao Gemini, que devolve um JSON com `intencao`, `tom`, `prioridade`, `numero_pedido`, `numero_viagem`, `transportadora`, `valor_divergencia`, `resumo`, `motivo` e `requer_humano`.
+5. **Normalização:** o `Code in JavaScript` limpa a resposta (remove markdown, faz parse, trata erro) e normaliza os campos para o formato esperado pela planilha.
+6. **Registro:** o `Append row in sheet` grava uma nova linha na planilha com data, remetente, assunto e todos os campos extraídos.
+7. **Resposta:** o `Code in JavaScript1` monta o HTML personalizado, e o `Reply to a message` envia a resposta no mesmo thread.
+8. **Encerramento:** o `Mark a message as read` marca o e-mail original como lido, impedindo que o trigger o processe novamente.
+
+### 3.4 Decisões de Arquitetura
+
+- **Filtro IF (nó 2):** sem ele, a resposta automática geraria um novo e-mail não lido no mesmo thread, e o fluxo entraria em loop infinito (o agente responderia a si mesmo).
+- **Mark as Read (nó 8):** complementa o IF. Mesmo com o filtro, o Gmail pode reativar o thread como "não lido" após a resposta. O `Mark as Read` garante que o e-mail original não seja reprocessado.
+- **Temperature 0.1:** escolhida para garantir consistência na classificação. Com temperature alta, o Gemini poderia variar a saída entre execuções (ex.: devolver `intenção` com acento em uma execução e sem acento em outra), quebrando o parser.
+- **Retry on Fail:** ativado no nó Gemini para lidar com instabilidades temporárias da API do Google (erros 503), garantindo que o fluxo não pare por falhas transitórias.
+- **Normalização no Code:** o Gemini pode devolver variações (com/sem acento, com/sem markdown). O nó Code trata essas variações antes de gravar na planilha, garantindo consistência nos dados.
+- **HTML pré-montado no Code:** o n8n tem um bug conhecido ao renderizar HTML inline no campo `Message` do nó Gmail. A solução foi pré-montar o HTML em um nó Code e passar a string pronta via expressão (`{{ $json.htmlPronto }}`).
+
+### 3.5 Stack Tecnológica
+
+| Componente | Tecnologia |
+|------------|------------|
+| Orquestração | n8n (self-hosted, versão 2.35.7) |
+| LLM | Google Gemini (`gemini-3.5-flash`) via API |
+| E-mail | Gmail API (OAuth2) |
+| Persistência | Google Sheets API (OAuth2) |
+| Linguagem de script | JavaScript (nós Code do n8n) |
